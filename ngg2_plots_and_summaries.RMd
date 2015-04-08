@@ -1,0 +1,309 @@
+---
+title: "NGG2 overview"
+author: "E. Roberson"
+date: "Wednesday, April 01, 2015"
+output: html_document
+---
+
+```{r genericFxns, message=FALSE, echo=FALSE }
+formalSpeciesNames = c( "saccharomyces_cerevisiae"="Saccharomyces cerevisiae", "caenorhabditis_elegans"="Caenorhabditis elegans", "drosophila_melanogaster"="Drosophila melanogaster",  "danio_rerio"="Danio rerio", "mus_musculus"="Mus musculus", "homo_sapiens"="Homo sapiens" )
+
+abbrevNames = c( "saccharomyces_cerevisiae"="Sc", "caenorhabditis_elegans"="Ce", "drosophila_melanogaster"="Dm",  "danio_rerio"="Dr", "mus_musculus"="Mm", "homo_sapiens"="Hs" )
+
+colorBlindPalette = c( "#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7" )
+
+load_bioc_libraries = function( libName=NA )
+  {
+  if ( !require( libName, character.only = TRUE ) ) {
+    source( "http://www.bioconductor.org/biocLite.R" )
+    biocLite( libName )
+    if ( !require( libName, character.only = TRUE ) ) {
+      stop( "Couldn't install", libName, "from Bioconductor. Please install manually." )
+    }
+  }
+}
+
+load_r_libraries = function( libName=NA )
+  {
+    if ( !require( libName, character.only = TRUE ) ) {
+      install.packages( libName )
+      if ( !require( libName, character.only = TRUE ) ) {
+        stop( "Couldn't install", libName, "from R packages. Please install manually." )
+      }
+    }
+  }
+```
+
+## Load needed libraries
+```{r, loadLibs, message=FALSE}
+load_r_libraries( "colorspace" )
+load_bioc_libraries( "plyr" )
+load_bioc_libraries( "dplyr" )
+load_bioc_libraries( "magrittr" )
+load_bioc_libraries( "reshape2" )
+load_bioc_libraries( "ggplot2" )
+load_bioc_libraries( "xtable" )
+```
+
+```{r analysisFxns, message=FALSE, echo=FALSE }
+strand2Matrix = function( filename )
+  {
+  inData = read.csv( filename, header=TRUE )
+  rownames( inData ) = as.character( inData[,1] )
+  colnames( inData )[c(2,3)] = c( "Sense", "Antisense" )
+  inData = as.matrix( inData[,c(2,3)] )
+  
+  return( inData )
+  }
+
+pam2Matrix = function( filename )
+  {
+  inData = read.csv( filename, header=TRUE )
+  rownames( inData ) = as.character( inData[,1] )
+  inData = as.matrix( inData[,-c(1)] )
+  
+  return( inData )
+  }
+
+prepForStrandPlot = function( strandCountMatrix, nameChange=abbrevNames )
+  {
+  strand.fract = strandCountMatrix / rowSums( strandCountMatrix )
+
+  rownames( strand.fract ) = nameChange[ rownames( strand.fract ) ]
+  
+  strand.fract = melt( strand.fract )
+  colnames( strand.fract ) = c( "Species", "Strand", "Fraction" )
+  
+  return( strand.fract )
+  }
+
+prepForPAMplot = function( pamCountMatrix, nameChange=abbrevNames )
+  {
+  pam.fract = pamCountMatrix / rowSums( pamCountMatrix )
+  
+  rownames( pam.fract ) = nameChange[ rownames( pam.fract ) ]
+  
+  pam.fract = melt( pam.fract )
+  colnames( pam.fract ) = c( "Species", "PAM", "Fraction" )
+  
+  return( pam.fract )
+  }
+
+strandBinom = function( inFrame )
+  {
+  sense = which( inFrame$Var2 == "Sense" )
+  antisense = which( inFrame$Var2 == "Antisense" )
+  
+  probs = binom.test( x=inFrame[sense,"value"], n=sum(inFrame[,"value"] ), p=0.5, alternative="two.sided" )
+  
+  return( c( "p.value" = probs$p.value, "estimate" = probs$estimate[[1]] ) )
+  }
+
+pamBinom = function( inFrame )
+  {
+  curr.species = as.character( unique( inFrame[,"Var1"] ) )
+  gc = as.numeric( readLines( paste( curr.species, "_gcPerc.txt", sep="" ), n=1,  warn=FALSE ) )
+  
+  agg = which( inFrame$Var2 == "AGG" )
+  cgg = which( inFrame$Var2 == "CGG" )
+  ggg = which( inFrame$Var2 == "GGG" )
+  tgg = which( inFrame$Var2 == "TGG" )
+  
+  gcCount = sum( inFrame$value[c( cgg, ggg ) ] )
+  total = sum( inFrame[,"value"] )
+  
+  probs = binom.test( x=gcCount, n=total, p=gc, alternative="two.sided" )
+  
+  return( c( "gc"=gc, "p.value" = probs$p.value, "estimate" = probs$estimate[[1]] ) )
+  }
+
+fractionCut = function( inputFrame )
+  {
+  cut = which( inputFrame$gRNAs == "Cut" )
+  uncut = which( inputFrame$gRNAs == "Uncut" )
+  
+  total = sum( inputFrame[c(cut,uncut),"Freq"] )
+  
+  return( c(Fraction=inputFrame[cut,"Freq"] / total ) )
+  }
+```
+
+## General stats and numbers
+
+### Overall counts input and stats
+```{r import, message=FALSE}
+summary.counts = read.csv( "all_species_counts.csv" )
+
+species = as.character( summary.counts[,1] )
+
+genomeSizes = summary.counts[,"MbGenome"]
+names( genomeSizes ) = species
+
+summary.counts = as.matrix( summary.counts[,-c(1,6)] )
+rownames( summary.counts ) = species
+
+total.all.gRNAs = colSums( summary.counts )
+
+summary.counts.perMb = summary.counts / genomeSizes[ rownames( summary.counts ) ]
+```
+
+### Count by species table
+```{r countBySpeciesTable, echo=FALSE, message=FALSE, results='asis'}
+rownames( summary.counts ) = formalSpeciesNames[ species ]
+
+print( xtable( rbind( summary.counts, total.all.gRNAs ), digits=c(0,0,0,0,0), display=c('s', 'd', 'd', 'd', 'd')), type='html' )
+```
+
+### Counts / mb
+```{r CountsPerMbBySpeciesTable,message=FALSE, echo=FALSE, results='asis'}
+rownames( summary.counts.perMb ) = formalSpeciesNames[ species ]
+
+print( xtable( summary.counts.perMb, digits=c(0,2,2,2,2), display=c('s', 'f', 'f', 'f', 'f')), type='html' )
+```
+
+```{r statsCntPerMb, message=FALSE}
+summary( summary.counts.perMb )
+```
+
+## Strandedness
+
+### Slurp
+```{r readstrand, message=FALSE}
+all.strand = strand2Matrix( "all_species_strand.csv" )
+
+gstart.strand = strand2Matrix( "all_species_gstart_strand.csv" )
+```
+
+### Plot
+```{r all_strand_figure, echo=FALSE, message=FALSE, fig.path="figures/", fig.keep='all', dpi=300}
+
+all.strand.forplot = prepForStrandPlot( all.strand )
+
+all.strand.forplot = cbind( SiteType="All", all.strand.forplot )
+
+gstart.strand.forplot = prepForStrandPlot( gstart.strand )
+
+gstart.strand.forplot = cbind( SiteType="Canonical", gstart.strand.forplot )
+
+strand.forplot = rbind( all.strand.forplot, gstart.strand.forplot )
+
+strand.plot = ggplot( strand.forplot, aes( x=Species, y=Fraction, fill=Strand ) ) + geom_bar( stat="identity" ) + geom_hline( y=0.5, lty=2 ) + facet_grid( .~SiteType ) + scale_fill_manual( values=colorBlindPalette ) + theme_bw() + theme( panel.grid.major.x = element_blank(), panel.grid.major.y = element_blank() )
+
+strand.plot
+```
+
+### Table of binomial probs
+```{r strandBinom, message=FALSE, results='asis' }
+all.strand.pval = all.strand %>% melt %>% ddply( .variables="Var1", .fun=strandBinom ) %>% cbind( gRNA_Type="All", . )
+
+gstart.strand.pval = gstart.strand %>% melt %>% ddply( .variables="Var1", .fun=strandBinom ) %>% cbind( gRNA_Type="Canonical", . )
+
+strand.pvals = rbind( all.strand.pval, gstart.strand.pval )
+
+colnames( strand.pvals )[2] = "Species"
+strand.pvals$Species = formalSpeciesNames[ as.character( strand.pvals$Species ) ]
+
+strand.pvals = cbind( strand.pvals, "p.adj" = p.adjust( strand.pvals$p.value ) )
+
+strand.pvals = strand.pvals[, c("gRNA_Type", "Species", "estimate", "p.value", "p.adj" )]
+
+strand.table = cbind( subset( strand.pvals, gRNA_Type == "All" ), subset( strand.pvals, gRNA_Type == "Canonical" ) )
+
+print( xtable( strand.table, digits=c(0,0,0,3,2,2,0,0,3,2,2), display=c('s', 's', 's', 'f','E', 'E', 's','s','f','E','E')), type='html', include.rownames=FALSE  )
+```
+
+## PAM sites
+
+### Slurp
+```{r readPam, message=FALSE}
+all.pam = pam2Matrix( "all_species_pam.csv" )
+
+gstart.pam = pam2Matrix( "all_species_gstart_pam.csv" )
+```
+
+### Plot
+```{r allPamfigure, message=FALSE, fig.path="figures/", fig.keep='all', dpi=300}
+all.pam.forplot = prepForPAMplot( all.pam )
+all.pam.forplot = cbind( SiteType="All", all.pam.forplot )
+
+gstart.pam.forplot = prepForPAMplot( gstart.pam )
+gstart.pam.forplot = cbind( SiteType="Canonical", gstart.pam.forplot )
+
+pam.forplot = rbind( all.pam.forplot, gstart.pam.forplot )
+
+pam.plot = ggplot( pam.forplot, aes( x=Species, y=Fraction, fill=PAM ) ) + geom_bar( stat="identity" ) + facet_grid( .~SiteType ) + scale_fill_manual( values=colorBlindPalette ) + theme_bw() + theme( panel.grid.major.x = element_blank(), panel.grid.major.y = element_blank() )
+
+pam.plot
+```
+
+### Binom probs
+```{r, message=FALSE, results='asis'}
+all.pam.pval = all.pam %>% melt %>% ddply( .variables="Var1", .fun=pamBinom ) %>% cbind( "gRNA_Type"="All", . )
+
+gstart.pam.pval = gstart.pam %>% melt %>% ddply( .variables="Var1", .fun=pamBinom ) %>% cbind( "gRNA_Type"="Canonical" )
+
+pam.pvals = rbind( all.pam.pval, gstart.pam.pval )
+
+colnames( pam.pvals )[2] = "Species"
+pam.pvals$Species = formalSpeciesNames[ as.character( pam.pvals$Species ) ]
+
+pam.pvals = cbind( pam.pvals, "p.adj" = p.adjust( pam.pvals$p.value ) )
+
+pam.pvals = pam.pvals[, c( "gRNA_Type", "Species", "gc", "estimate", "p.value", "p.adj" ) ]
+
+pam.table = cbind( subset( pam.pvals, gRNA_Type =="All" ), subset( pam.pvals, gRNA_Type == "Canonical" ) )
+
+print( xtable( pam.table, digits=c(0,0,0,3,3,2,2,0,0,4,3,2,2), display=c('s', 's', 's', 'f', 'f', 'E', 'E', 's', 's', 'f','f','E','E')), type='html', include.rownames=FALSE  )
+```
+
+## Gene cut rates
+
+### Slurp
+```{r getBiotypes, message=FALSE}
+biotypes = c()
+
+getList = c( "All gRNA"="all_species_all_gRNA_biotypes.csv", "All gRNA - Unique sites"="all_species_unique_gRNA_biotypes.csv", "Canonical gRNA"="all_species_gstart_gRNA_biotypes.csv", "Canonical gRNA - Unique sites"="all_species_gstart_unique_gRNA_biotypes.csv")
+
+for ( i in 1:length( getList ) ) {
+  biotypes = read.csv( getList[i], header=TRUE ) %>%
+    cbind( "gRNA_Type"=names(getList)[i], . ) %>%
+    rbind( biotypes, . )
+}
+
+colnames( biotypes )[2] = "Species"
+
+biotypes$Species = factor( abbrevNames[ as.character( biotypes$Species ) ], levels=abbrevNames )
+```
+
+
+### Plot protein cutting cutter rate
+```{r proteinCutPlot, message=FALSE, fig.path="figures/", fig.keep='all', dpi=300}
+biotypes.protein = subset( biotypes, gene_biotype == "protein_coding" )
+
+biotype.protein.forplot = ddply( biotypes.protein, .variables = c("gRNA_Type", "Species"), .fun=fractionCut )
+
+protein.cut.plot = ggplot( biotype.protein.forplot, aes( x=Species, y=Fraction, fill=factor(1) ) ) + geom_bar( stat="identity" ) + facet_wrap( ~ gRNA_Type, ncol=2 ) + theme_bw() + theme( panel.grid.major.x = element_blank(), legend.position="none" ) + scale_fill_manual( values=colorBlindPalette )
+
+protein.cut.plot
+```
+
+### Table protein coding all cutters
+```{r proteinAllTypes, message=FALSE, results='asis'}
+biotype.protein.table = cbind( subset( biotype.protein.forplot, gRNA_Type =="All gRNA" ), subset( biotype.protein.forplot, gRNA_Type == "All gRNA - Unique sites" ), subset( biotype.protein.forplot, gRNA_Type == "Canonical gRNA" ), subset( biotype.protein.forplot, gRNA_Type == "Canonical gRNA - Unique sites" ) )
+
+print( xtable( biotype.protein.table, digits=c(0,0,0,3,0,0,3,0,0,3,0,0,3), display=c('s', 's', 's', 'f', 's', 's', 'f', 's', 's', 'f', 's', 's', 'f')), type='html', include.rownames=FALSE  )
+```
+
+### table all types cut rate
+```{r allBiotypeGstartUniqueTable, message=FALSE, results='asis'}
+biotype.gstart.unique = subset( biotypes, gRNA_Type == "Canonical gRNA - Unique sites" )
+
+biotype.gstart.unique.table = ddply( biotype.gstart.unique, .variables=c("gRNA_Type", "Species", "gene_biotype" ), .fun=fractionCut )
+
+print( xtable( biotype.gstart.unique.table[,c(-1)], digits=c(0,0,0,2), display=c('s', 's', 's','f')), type='html', include.rownames=FALSE  )
+```
+
+## SessionInfo
+```{r session, message=FALSE}
+sessionInfo()
+```
