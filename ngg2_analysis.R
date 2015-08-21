@@ -8,7 +8,17 @@ load_bioc_libraries = function( libName=NA )
 		{
 			stop( "Couldn't install", libName, "from Bioconductor. Please install manually." )
 		}
-  }
+	}
+}
+
+load_r_libraries = function( libName=NA )
+{
+	if ( !require( libName, character.only = TRUE ) ) {
+		install.packages( libName )
+		if ( !require( libName, character.only = TRUE ) ) {
+			stop( "Couldn't install", libName, "from R packages. Please install manually." )
+		}
+	}
 }
 
 ############
@@ -21,6 +31,7 @@ load_bioc_libraries( "dplyr" )
 load_bioc_libraries( "magrittr" )
 load_bioc_libraries( "tidyr" )
 load_bioc_libraries( "stringr" )
+load_r_libraries( "knitr" )
 
 ##################
 # parallel ddply #
@@ -31,7 +42,15 @@ load_bioc_libraries( "stringr" )
 # doMC can probably be replaced by your parallel backend of choice
 # but be sure to modify the deregister at the end if necessary
 PARALLEL = TRUE
-NUM_CPUS = 10
+NUM_CPUS = scan( "num_rscript_cpus", quite=TRUE )[1] %>% as.integer
+
+if ( NUM_CPUS > 1 )
+{
+	PARALLEL = TRUE
+} else
+{
+	PARALLEL = FALSE
+}
 
 if ( PARALLEL )
 {
@@ -108,8 +127,17 @@ read_gtf_file = function( gtfFilename, faiObj, in_parallel=FALSE )
 
 grna_to_GRanges = function( grna_obj, fai_obj, genome_name )
 {
+	circ = rep( FALSE, dim( fai_obj )[1] )
+	
+	mitoIndex = which( fai_obj$name %in% c( "M", "chrM", "MT", "chrMT" ) )
+	
+	if ( length( mitoIndex ) > 0 )
+	{
+		circ[mitoIndex] = TRUE
+	}
+	
 	# seq info from fai file
-	mySeqInfo = Seqinfo( seqnames = fai_obj$name, seqlengths = fai_obj$size, isCircular = rep(FALSE, dim(fai_obj)[1]), genome = genome_name )
+	mySeqInfo = Seqinfo( seqnames = fai_obj$name, seqlengths = fai_obj$size, isCircular = circ, genome = genome_name )
 	
 	# GRanges object
 	gr = GRanges( seqnames = grna_obj$Contig, ranges = IRanges( start=grna_obj$Start, end=grna_obj$End), strand = grna_obj$Strand, mcols = grna_obj[,-c(1,2,3,6)], seqinfo = mySeqInfo )
@@ -144,7 +172,7 @@ collapse_using_indexes = function( input_data_frame, gtf_df, exon_GRanges )
 ########################
 # data capture objects #
 ########################
-species = c( 'saccharomyces_cerevisiae', 'caenorhabditis_elegans', 'drosophila_melanogaster', 'danio_rerio', 'mus_musculus', 'homo_sapiens' )
+species = scan( 'species', 'character', quiet=TRUE )
 pamSites = c( "AGG", "CGG", "GGG", "TGG" )
 strandTypes = c( "+", "-", "*" )
 
@@ -175,7 +203,7 @@ for ( species_index in 1:length( species ) )
 	
 	gtf = read_gtf_file( paste( "gtfs/", curr_species, ".gtf", sep="" ), fai, in_parallel = PARALLEL )
 	
-	grna = paste( "grna_out/", curr_species, "_full_10cpu_grnas.csv", sep="" ) %>%
+	grna = paste( "grna_out/", curr_species, "_full_grnas.csv", sep="" ) %>%
 		read.csv( header=TRUE, stringsAsFactors=FALSE ) %>%
 		arrange( Contig, Start, End )
 	
@@ -186,23 +214,22 @@ for ( species_index in 1:length( species ) )
 	# count gRNA occurences   #
 	# identify unique cutters #
 	###########################
-	grnaSeqCounts = grna$gRNA_Seq %>% table %>% data.frame
-	colnames( grnaSeqCounts ) = c( "gRNA_Seq", "NumPerfectGenomeMatches" )
+	singleCutters = grna %>%
+		subset( Unique == "Yes" ) %>%
+		select( gRNA_Seq )
+	singleCutters = singleCutters$gRNA_Seq
 	
-	grnaSeqCounts = grnaSeqCounts %>%
-		mutate( gRNA_Seq = as.character( gRNA_Seq ) )
-		
-	rownames( grnaSeqCounts ) = as.character( grnaSeqCounts$gRNA_Seq )
-	
-	singleCutters = grnaSeqCounts %>% subset( NumPerfectGenomeMatches == 1 )
-	
-	listOfGstarts = grna[ which( grna$G_start == "True" ), "gRNA_Seq" ] %>% unique
+	listOfGstarts = grna %>%
+		subset( G_start == "True" ) %>%
+		select( gRNA_Seq )
+	listOfGstarts = listOfGstarts$gRNA_Seq %>%
+		unique
 	
 	#####################
 	# convert to ranges #
 	#####################
 	gr.grna = grna_to_GRanges( grna, fai, curr_species )
-	rm( grna )
+	rm( grna ) # this is mostly just to save memory for the species with lots of grna sites
 
 	############
 	# overlaps #
@@ -211,54 +238,53 @@ for ( species_index in 1:length( species ) )
 	
 	olap.names = data.frame(
 		gRNA_Seq = mcols( gr.grna )[queryHits(olap),"mcols.gRNA_Seq"],
-		gene_id = names(exons)[subjectHits(olap)] )
-	
-	olap.names.na.index = which( is.na( olap.names$gene_id ) )
-	
-	olap.names = olap.names %>%
+		gene_id = names(exons)[subjectHits(olap)] ) %>%
 		mutate( gRNA_Seq = as.character( gRNA_Seq ) ) %>%
-		mutate( gene_name = as.character( gene_id ) )
-	
-	if ( length( olap.names.na.index ) > 0 )
-	{
-		olap.names$gene_id[olap.names.na.index] = ""
-	}
+		mutate( gene_id = as.character( gene_id ) )
 	
 	olap.names.unique = olap.names %>%
-		filter( gRNA_Seq %in% singleCutters$gRNA_Seq )
+		filter( gRNA_Seq %in% singleCutters )
  
 	olap.names.gstart = olap.names %>%
 		filter( gRNA_Seq %in% listOfGstarts )
 
 	olap.names.gstart.unique = olap.names %>%
-		filter( gRNA_Seq %in% singleCutters$gRNA_Seq & gRNA_Seq %in% listOfGstarts )
+		filter( gRNA_Seq %in% singleCutters & gRNA_Seq %in% listOfGstarts )
 
 	#######################
 	# find gRNAs per gene #
 	#######################
 	# I use the gene_ids and gRNA_Seq for this
 	# We're interested in total and unique cutters.
-	# That is derived from the grna_seqs, not the PAM site
-	grnasPerGene = olap.names$gene_id %>% table %>% data.frame
+	# That is derived from the grna_seqs and not the PAM site
+	grnasPerGene = olap.names$gene_id %>%
+		table %>%
+		data.frame
 	colnames( grnasPerGene ) = c( "gene_id", "gRNAs" )
 	
 	# unique separate from all
-	uniqueGrnasPerGene = olap.names.unique$gene_id %>% table %>% data.frame
+	uniqueGrnasPerGene = olap.names.unique$gene_id %>%
+		table %>%
+		data.frame
 	colnames( uniqueGrnasPerGene ) = c("gene_id", "unique_gRNAs" )
 
 	# gstarts per gene
-	gstartGrnaPerGene = olap.names.gstart$gene_id %>% table %>% data.frame
+	gstartGrnaPerGene = olap.names.gstart$gene_id %>%
+		table %>%
+		data.frame
 	colnames( gstartGrnaPerGene ) = c( "gene_id", "gStart_gRNAs" )
 
 	# uniq gstarts per gene
-	gstartUniqGrnaPerGene = olap.names.gstart.unique$gene_id %>% table %>% data.frame
+	gstartUniqGrnaPerGene = olap.names.gstart.unique$gene_id %>%
+		table %>%
+		data.frame
 	colnames( gstartUniqGrnaPerGene ) = c( "gene_id", "gStart_uniq_gRNAs" )
 	
 	# merge with gene data
-	genesWithCounts = merge( gtf, grnasPerGene, all.x=TRUE ) %>%
-		merge( uniqueGrnasPerGene, all.x=TRUE ) %>%
-		merge( gstartGrnaPerGene, all.x=TRUE ) %>%
-		merge( gstartUniqGrnaPerGene, all.x=TRUE ) %>% 
+	genesWithCounts = merge( gtf, grnasPerGene, by="gene_id", all.x=TRUE ) %>%
+		merge( uniqueGrnasPerGene, by="gene_id", all.x=TRUE ) %>%
+		merge( gstartGrnaPerGene, by="gene_id", all.x=TRUE ) %>%
+		merge( gstartUniqGrnaPerGene, by="gene_id", all.x=TRUE ) %>% 
 		mutate( gRNAs = ifelse( is.na( gRNAs ), 0, gRNAs ) ) %>%
 		mutate( unique_gRNAs = ifelse( is.na( unique_gRNAs ), 0, unique_gRNAs ) ) %>%
 		mutate( gStart_gRNAs = ifelse( is.na( gStart_gRNAs ), 0, gStart_gRNAs ) ) %>%
@@ -266,6 +292,19 @@ for ( species_index in 1:length( species ) )
 		mutate( gene_name = ifelse( is.na( gene_name ), "", gene_name ) ) %>%
 		select( Contig, Source, Start, End, Strand, gene_id, gene_name, gene_biotype, gRNAs, unique_gRNAs, gStart_gRNAs, gStart_uniq_gRNAs ) %>%
 		arrange( Contig, Start, End, Strand, gene_id )
+	
+	########################
+	# quick validity check #
+	########################
+	if (! all( genesWithCounts$unique_gRNAs <= genesWithCounts$gRNAs, na.rm=TRUE ) )
+	{
+		stop( "More unique gRNAs than total gRNAs for some sites!!!" )
+	}
+	
+	if (! all( genesWithCounts$gStart_uniq_gRNAs <= genesWithCounts$gStart_gRNAs, na.rm=TRUE ) )
+	{
+		stop( "More unique G-start gRNAs that total G-start gRNAs for some sites!!!" )
+	}
 	
 	# write gene info per organism
 	write.csv( genesWithCounts, paste( "R_output/", curr_species, "_cutsPerGene.csv", sep=""), row.names=FALSE, quote=FALSE )
@@ -276,7 +315,10 @@ for ( species_index in 1:length( species ) )
 	# I switch back to using gRNA and gtf index.
 	# The gene overlapped by a specific gRNA depends on *site*, not sequence.
 	
-	grnaNumGeneOverlaps = olap %>% queryHits %>% table %>% data.frame
+	grnaNumGeneOverlaps = olap %>%
+		queryHits %>%
+		table %>%
+		data.frame
 	colnames( grnaNumGeneOverlaps ) = c( "gRNA_Index", "Freq" )
 	
 	singleGeneOverlaps = subset( grnaNumGeneOverlaps, Freq == 1 )
@@ -302,7 +344,6 @@ for ( species_index in 1:length( species ) )
 		merge( 
 			data.frame(gRNA_Index = singleIndexes$queryHits, gene_id = names( exons )[ singleIndexes$subjectHits ] ),
 			by="gene_id", all.y=TRUE ) %>%
-		arrange( gRNA_Index, gene_id ) %>%
 		select( gRNA_Index, gene_id, gene_name ) %>%
 		mutate( gene_id = as.character( gene_id ) ) %>%
 		mutate( gene_id = ifelse( is.na( gene_id ), "", gene_id ) ) %>%
@@ -325,11 +366,10 @@ for ( species_index in 1:length( species ) )
 		Strand = as.character( strand( gr.grna[grIndex] ) ),
 		mcols( gr.grna )[grIndex,]
 		)
-	
 	colnames( grnasFromRanges ) = gsub( "mcols.", "", colnames( grnasFromRanges ) )
 	
 	grnasFromRanges = grnasFromRanges %>%
-		merge( grnaGenes, all.x=TRUE ) %>%
+		merge( grnaGenes, by="gRNA_Index", all.x=TRUE ) %>%
 		mutate( gene_id = ifelse( is.na( gene_id ), "", gene_id ) ) %>%
 		mutate( gene_name = ifelse( is.na( gene_name ), "", gene_name ) ) %>%
 		select( Contig, Start, End, Strand, gRNA_Seq, PAM, G_start, Unique ) %>%
@@ -343,46 +383,67 @@ for ( species_index in 1:length( species ) )
 	################################
 	
 	# cut gene biotypes
-	geneBiotypeAllgRNA  = genesWithCounts[,c("gene_biotype", "gRNAs")] %>%
+	geneBiotypeAllgRNA  = genesWithCounts %>%
+		select( gene_biotype, gRNAs ) %>%
 		mutate( gRNAs=ifelse( gRNAs>0, "Cut", "Uncut" ) ) %>%
 		xtabs( ~gRNAs+gene_biotype, data=. ) %>%
 		as.data.frame %>%
 		data.frame( species=curr_species, .) %>%
 		rbind( geneBiotypeAllgRNA )
 	
-	geneBiotypeUniquegRNA  = genesWithCounts[,c("gene_biotype", "unique_gRNAs")] %>%
+	geneBiotypeUniquegRNA  = genesWithCounts %>%
+		select( gene_biotype, unique_gRNAs ) %>%
 		mutate( gRNAs=ifelse( unique_gRNAs>0, "Cut", "Uncut" ) ) %>%
 		xtabs( ~gRNAs+gene_biotype, data=. ) %>%
 		as.data.frame %>%
 		data.frame( species=curr_species, .) %>%
 		rbind( geneBiotypeUniquegRNA  )
  
-	geneBiotypeGstartgRNA  = genesWithCounts[,c("gene_biotype", "gStart_gRNAs")] %>%
+	geneBiotypeGstartgRNA  = genesWithCounts %>%
+		select( gene_biotype, gStart_gRNAs ) %>%
 		mutate( gRNAs=ifelse( gStart_gRNAs>0, "Cut", "Uncut" ) ) %>%
 		xtabs( ~gRNAs+gene_biotype, data=. ) %>%
 		as.data.frame %>%
 		data.frame( species=curr_species, .) %>%
 		rbind( geneBiotypeGstartgRNA  )
  
-	geneBiotypeUniqueGstartgRNA  = genesWithCounts[,c("gene_biotype", "gStart_uniq_gRNAs")] %>%
+	geneBiotypeUniqueGstartgRNA  = genesWithCounts %>%
+		select( gene_biotype, gStart_uniq_gRNAs ) %>%
 		mutate( gRNAs=ifelse( gStart_uniq_gRNAs>0, "Cut", "Uncut" ) ) %>%
 		xtabs( ~gRNAs+gene_biotype, data=. ) %>%
 		as.data.frame %>%
 		data.frame( species=curr_species, .) %>%
 		rbind( geneBiotypeUniqueGstartgRNA  )
 
+	#######################################################################
+	# Reality check:                                                      #
+	# The analysis does *not* use only G-start sites                      #
+	# Total sites should therefore not be identical to only G-start sites #
+	# Also it is not limited to unique sites. Therefore all sites should  #
+	# not be identical to only unique sites                               #
+	#######################################################################
+	if ( all( geneBiotypeAllgRNA == geneBiotypeGstartgRNA ) )
+	{
+		stop( "There is not difference in all gRNA sites and only G-start sites!" )
+	}
+	
+	if ( all( geneBiotypeAllgRNA == geneBiotypeUniquegRNA ) )
+	{
+		stop( "There is no difference in all gRNA sites and unique sites only!" )
+	}
+		
 	# total gRNA
 	countInfo[curr_species,"total_gRNAs"] = length( gr.grna )
 	
 	# unique gRNA
-	countInfo[curr_species,"unique_gRNAs"] = dim( singleCutters )[1]
+	countInfo[curr_species,"unique_gRNAs"] = length( singleCutters )
 	
 	# gStarts
 	countInfo[curr_species, "gStarts"] = length( listOfGstarts )
 
 	# uniqGstarts
 	uniqGstartsCount = grnasFromRanges %>%
-		subset( G_start == "True" & Unique == "Yes" ) %>%
+		filter( G_start == "True" & Unique == "Yes" ) %>%
 		dim
 	countInfo[curr_species, "uniqGstarts"] = uniqGstartsCount[1]
 	
@@ -398,7 +459,11 @@ for ( species_index in 1:length( species ) )
 	strandInfo[curr_species,] = strandTab[colnames( strandInfo )]
 
 	# gstart mcol index
-	mcolGstartIndex = which( mcols( gr.grna )[,"mcols.G_start"] == "Yes" )
+	mcolGstartIndex = mcols( gr.grna ) %>%
+		as.data.frame %>%
+		filter( mcols.G_start == "True" ) %>%
+		rownames %>%
+		as.integer
 
 	# PAM - canonical
 	pamTab = mcols( gr.grna )[mcolGstartIndex,"mcols.PAM"] %>% table
@@ -415,8 +480,10 @@ for ( species_index in 1:length( species ) )
 write.csv( countInfo, file="R_output/all_species_counts.csv", quote=FALSE )
 write.csv( pamInfo, file="R_output/all_species_pam.csv", quote=FALSE )
 write.csv( strandInfo, file="R_output/all_species_strand.csv", quote=FALSE )
+
 write.csv( gStartPamInfo, file="R_output/all_species_gstart_pam.csv", quote=FALSE )
 write.csv( gStartStrandInfo, file="R_output/all_species_gstart_strand.csv", quote=FALSE )
+
 write.csv( geneBiotypeAllgRNA, file="R_output/all_species_all_gRNA_biotypes.csv", quote=FALSE, row.names=FALSE )
 write.csv( geneBiotypeUniquegRNA, file="R_output/all_species_unique_gRNA_biotypes.csv", quote=FALSE, row.names=FALSE )
 write.csv( geneBiotypeGstartgRNA, file="R_output/all_species_gstart_gRNA_biotypes.csv", quote=FALSE, row.names=FALSE )
