@@ -9,29 +9,37 @@ The figures directory contains the images generated during the final analysis us
 ## Running the analysis
 
 ### Requirements
-* R, packages will prompt for install if needed
+* Linux + bash
+* R, packages should prompt for install if needed
 * make
 * wget
-* samtools
-* R Studio with knitr
+* R Studio with knitr (to knit the RMd file)
 * python, along with the [ngg2 program](https://github.com/RobersonLab/ngg2)
 * the scripts from this repository
 
 ### Downloading required genomes
-The makefile handles downloading the genomes, creating the FASTA index for each genome, downloading the gene annotations, calculating genome GC content for each organism, and running ngg2 on each genome. It should be run first.
+The makefile handles the entire analysis from file downloads to annoation of sites. There are several parameters you may wish to edit.
 
+* species - this file contains a list of all species to download from Ensembl. Add or remove as you wish.
+* num_ngg2_cpus - sets how many processors to run ngg2
+* num_rscript_cpus - sets how many processors to run R analysis (may be memory intensive)
+* ngg2_analysis.R - you may wish to change the registered parallel backend for R to use (make sure to deactivate at end of R script)
+
+### Running analysis
 ```bash
-make -f ngg2_datageneration.make 1>prep_data.log 2>&1
+nohup make -f ngg2_datageneration.make 1>ngg2_paper.log 2>&1 &
 ```
 
-### Annotating gRNA overlaps with genes and gather meta information
-The annotation of gRNAs and genes uses the Bioconductor GenomicRanges package. The data preparation should download all files necessary to annotate the data. Annotation is performed in R using ngg2_analysis.R.
+## Associated paper data
+There are two versions of the data associated with this paper.
 
-The script is set by default to not allow parallel execution. However, parallel execution will greatly decrease runtime. Adjust the PARALLEL variable to TRUE and set the number of CPUs to run the ldply and ddply sections in parallel. doMC is registered as the backend, but that could be altered to suit your preferences.
+- Version 1
+> This was run with the early versions of ngg2 and ran a **block** scan. That means that if two gRNA sites overlap one another on the same strand, only the first is reported. Only 6 model species were tested.
 
-```bash
-R --vanilla < ngg2_analysis.R 1>ngg.log 2>&1
-```
+- Version 2
+> This version was run with a more efficient, multiprocessing ngg2 version using **exhaustive** scanning to identify all 3'GG gRNA sites. Two additional species, African elephan and pigs, were added in this analysis.
 
-### Generate summary information, tables, and figures with R Markdown
-The summarizing R Markdown file ngg2_plots_and_summaries.RMd should be in the same directory as the analysis output. To recreate the analysis, simple open the Markdown file in R Studio and knit the output to your preferred file format.
+| Data | Type | Preprint |
+| :--- | :--- | :---- |
+| [Version 1 fileset](http://dx.doi.org/10.6084/m9.figshare.1371077) | Block scan | [ngg2 v1](https://dx.doi.org/10.7287/peerj.preprints.969v1) |
+| [Version 2 fileset](http://dx.doi.org/10.6084/m9.figshare.1515944) | Exhaustive scan | |
