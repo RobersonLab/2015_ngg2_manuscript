@@ -42,7 +42,7 @@ load_r_libraries( "knitr" )
 # doMC can probably be replaced by your parallel backend of choice
 # but be sure to modify the deregister at the end if necessary
 PARALLEL = TRUE
-NUM_CPUS = scan( "num_rscript_cpus", quite=TRUE )[1] %>% as.integer
+NUM_CPUS = scan( "num_rscript_cpus", quiet=TRUE )[1] %>% as.integer
 
 if ( NUM_CPUS > 1 )
 {
