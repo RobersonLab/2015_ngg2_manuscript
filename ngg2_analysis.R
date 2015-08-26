@@ -129,7 +129,7 @@ grna_to_GRanges = function( grna_obj, fai_obj, genome_name )
 {
 	circ = rep( FALSE, dim( fai_obj )[1] )
 	
-	mitoIndex = which( fai_obj$name %in% c( "M", "chrM", "MT", "chrMT" ) )
+	mitoIndex = which( fai_obj$name %in% c( "MT", "Mt", "M", 'MtDNA', 'Mito', 'chrMT', "chrMt", "chrM", "chrMtDNA", 'chrMito' ) )
 	
 	if ( length( mitoIndex ) > 0 )
 	{
