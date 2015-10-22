@@ -121,7 +121,8 @@ read_gtf_file = function( gtfFilename, faiObj, in_parallel=FALSE )
 	rownames( dat ) = dat$gene_id %>% as.character
 	
 	dat %>%
-		filter( Contig %in% faiObj$name & Source == 'ensembl' ) %>%
+		filter( Contig %in% faiObj$name ) %>%
+		filter( Source == 'ensembl' | Source == 'FlyBase' ) %>%
 		return
 }
 
