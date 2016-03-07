@@ -373,7 +373,7 @@ for ( species_index in 1:length( species ) )
 		merge( grnaGenes, by="gRNA_Index", all.x=TRUE ) %>%
 		mutate( gene_id = ifelse( is.na( gene_id ), "", gene_id ) ) %>%
 		mutate( gene_name = ifelse( is.na( gene_name ), "", gene_name ) ) %>%
-		select( Contig, Start, End, Strand, gRNA_Seq, PAM, G_start, Unique ) %>%
+		select( Contig, Start, End, Strand, gRNA_Seq, PAM, G_start, Unique, gene_id, gene_name ) %>%
 		arrange( Contig, Start, Strand )
 	
 	# write per species
