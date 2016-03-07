@@ -1,6 +1,9 @@
 # 2015_ngg2_manuscript
 Repository for scripts associated with manuscript.
 
+Associated paper:
+Roberson EDO. (2015) [Identification of high-efficiency 3'GG gRNA motifs in indexed FASTA files with ngg2](https://peerj.com/articles/cs-33). PeerJ Computer Science 1:e33.
+
 ## Directory layout
 The top level directory contains the scripts necessary to repeat the analysis.
 
